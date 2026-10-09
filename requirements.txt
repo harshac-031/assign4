@@ -1,5 +1,7 @@
 streamlit>=1.40.0
-streamlit-folium>=0.15.0
+streamlit-folium>=0.24.0
+streamlit-geolocation>=0.0.10
+reverse_geocoder>=1.5.1
 folium>=0.14.0
 plotly>=5.18.0
 geonamescache>=2.0.0

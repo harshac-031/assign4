@@ -1,120 +1,83 @@
 import math
+import random
 import streamlit as st
-import pandas as pd
-import plotly.express as px
 import folium
 from streamlit_folium import st_folium
+from streamlit_geolocation import streamlit_geolocation
 import geonamescache
 
-st.title("My Trip Around the World")
-st.write("Plan a trip! Start at your home city, visit 3 other cities, and find out how far you travel. "
-         "Then see how wrong a flat map would be.")
+st.title("Closest or Farthest? The Flight Game")
+st.write("You are the pilot! We pick 4 mystery cities from 4 different countries. "
+         "Can you guess which one is the CLOSEST to you and which one is the FARTHEST?")
 
-# Step 1: load real cities (offline). The biggest city wins when two share a name.
+# load real cities (offline). The biggest city wins when two share a name.
 gc = geonamescache.GeonamesCache()
-big_cities = [city for city in gc.get_cities().values() if city["population"] >= 1_000_000]
+countries = gc.get_countries()
+big_cities = [city for city in gc.get_cities().values() if city["population"] >= 3_000_000]
 cities = {city["name"]: city for city in sorted(big_cities, key=lambda city: city["population"])}
-city_names = sorted(cities, key=lambda name: cities[name]["population"], reverse=True)   # biggest city first (type to search!)
 
-# Step 2: three ready-made helpers (the same ones you used in class)
-def real_distance(city_a, city_b):
-    """Distance in km on the ROUND Earth."""
-    lat1, lat2 = math.radians(city_a["latitude"]), math.radians(city_b["latitude"])
-    lon_gap = math.radians(city_b["longitude"] - city_a["longitude"])
+# a ready-made helper that measures the real distance in km on the ROUND Earth
+def real_distance(place_a, place_b):
+    lat1, lat2 = math.radians(place_a["latitude"]), math.radians(place_b["latitude"])
+    lon_gap = math.radians(place_b["longitude"] - place_a["longitude"])
     x = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(lon_gap / 2) ** 2
     return 2 * 6371 * math.asin(math.sqrt(x))
 
-def flat_map_distance(city_a, city_b):
-    """A flat-map guess in km: treat the Earth like a sheet of paper (1 degree is about 111 km)."""
-    return math.hypot(city_a["latitude"] - city_b["latitude"], city_a["longitude"] - city_b["longitude"]) * 111
-
-def curved_path(city_a, city_b):
-    """Points along the shortest path on the globe, so we can draw it as a curve on the map."""
-    lat1, lon1 = math.radians(city_a["latitude"]), math.radians(city_a["longitude"])
-    lat2, lon2 = math.radians(city_b["latitude"]), math.radians(city_b["longitude"])
-    angle = real_distance(city_a, city_b) / 6371
-    path, last_longitude = [], city_a["longitude"]
-    for step in range(41):
-        fraction = step / 40
-        weight_a = math.sin((1 - fraction) * angle) / math.sin(angle)
-        weight_b = math.sin(fraction * angle) / math.sin(angle)
-        x = weight_a * math.cos(lat1) * math.cos(lon1) + weight_b * math.cos(lat2) * math.cos(lon2)
-        y = weight_a * math.cos(lat1) * math.sin(lon1) + weight_b * math.cos(lat2) * math.sin(lon2)
-        z = weight_a * math.sin(lat1) + weight_b * math.sin(lat2)
-        longitude = math.degrees(math.atan2(y, x))
-        longitude += 360 * round((last_longitude - longitude) / 360)       # do not jump across the map edge
-        path.append([math.degrees(math.atan2(z, math.hypot(x, y))), longitude])
-        last_longitude = longitude
-    return path
-
-# Step 3: the student plans the trip
-home_name = st.selectbox("Your home city (click here and type to search)", city_names, index=None, placeholder="Choose your home city")
-first_box, second_box, third_box = st.columns(3)
-stop_one = first_box.selectbox("Stop 1", city_names, index=None, placeholder="Choose a city")
-stop_two = second_box.selectbox("Stop 2", city_names, index=None, placeholder="Choose a city")
-stop_three = third_box.selectbox("Stop 3", city_names, index=None, placeholder="Choose a city")
-come_home = st.radio("Do you fly back home at the end?", ["Yes", "No"], horizontal=True)
-
-if home_name is None or stop_one is None or stop_two is None or stop_three is None:
-    st.info("Choose your home city and all 3 stops to see your trip!")
-    st.stop()                                                # wait until all 4 cities are chosen
-
-if home_name in [stop_one, stop_two, stop_three] or stop_one in [stop_two, stop_three] or stop_two == stop_three:
-    st.warning("Pick 4 different cities for your trip!")
-    st.stop()                                                # wait until all 4 cities are different
-trip_names = [home_name, stop_one, stop_two, stop_three]
-if come_home == "Yes":
-    trip_names = trip_names + [home_name]                    # add the flight back home
-
-# Step 4: measure every leg of the trip, in both ways
-legs = []
-for number in range(len(trip_names) - 1):
-    start_city, end_city = cities[trip_names[number]], cities[trip_names[number + 1]]
-    legs.append({"name": f"{number + 1}. {start_city['name']} to {end_city['name']}",
-                 "start": start_city, "end": end_city,
-                 "real_km": round(real_distance(start_city, end_city)),
-                 "flat_km": round(flat_map_distance(start_city, end_city))})
-
-total_real_km = sum(leg["real_km"] for leg in legs)
-total_flat_km = sum(leg["flat_km"] for leg in legs)
-longest_leg = max(legs, key=lambda leg: leg["real_km"])
-percent_wrong = 100 * (total_flat_km - total_real_km) / total_real_km
-
-# Step 5: the trip report
-first, second, third = st.columns(3)
-first.metric("Real distance of your trip", f"{total_real_km:,} km")
-second.metric("Flying time (at 900 km per hour)", f"{total_real_km / 900:.1f} hours")
-third.metric("Flat-map guess", f"{total_flat_km:,} km", f"{percent_wrong:+.0f}% compared with real", delta_color="off")
-st.write(f"Your longest leg is **{longest_leg['name']}**: {longest_leg['real_km']:,} km.")
-if percent_wrong >= 10 or percent_wrong <= -10:
-    st.warning(f"A flat map would get your trip WRONG by {percent_wrong:+.0f}%! Flat maps stretch the far North and South.")
+# 1. Where are you? (the target button from class, or choose your city)
+st.subheader("Where are you?")
+st.write("Press the small target button and allow your browser to share your location.")
+my_place = streamlit_geolocation()
+if my_place["latitude"] is not None:
+    me = {"latitude": my_place["latitude"], "longitude": my_place["longitude"]}
 else:
-    st.success("The flat map was close this time. Try a trip with cities far to the North or South!")
+    home_name = st.selectbox("No GPS? Choose the big city nearest to you.", sorted(cities), index=None, placeholder="Choose your city")
+    if home_name is None:
+        st.info("Press the target button, or choose your city, to start the game!")
+        st.stop()                                                    # wait until we know where you are
+    me = cities[home_name]
+my_city = min(cities.values(), key=lambda city: real_distance(me, city))
+st.success(f"Your nearest big city is {my_city['name']}, {countries[my_city['countrycode']]['name']}. This app does not save your location.")
 
-# Step 6: bars (green = real, red = flat-map guess) next to the satellite map
-bars = pd.DataFrame([{"Leg": leg["name"], "Measure": measure, "Distance (km)": leg[key]}
-                     for leg in legs
-                     for measure, key in (("Real distance", "real_km"), ("Flat-map guess", "flat_km"))])
-bar_chart = px.bar(bars, x="Leg", y="Distance (km)", color="Measure", barmode="group", text_auto=True,
-                   color_discrete_map={"Real distance": "#2ecc71", "Flat-map guess": "#e74c3c"},
-                   title="How long is each leg of your trip?")
-bar_chart.update_layout(height=450, legend_title_text="")
+# 2. The button picks 4 random cities from 4 different countries (not your own country)
+other_cities = {city["countrycode"]: name for name, city in cities.items() if city["countrycode"] != my_city["countrycode"]}
+if st.button("Pick 4 mystery cities"):
+    st.session_state.mystery = random.sample(list(other_cities.values()), 4)
+if "mystery" not in st.session_state:
+    st.stop()                                                        # wait for the first pick
+mystery = st.session_state.mystery
+distances = {name: real_distance(me, cities[name]) for name in mystery}
+closest = min(distances, key=distances.get)
+farthest = max(distances, key=distances.get)
 
-trip_map = folium.Map(tiles="Esri.WorldImagery")
-all_points = []
-for leg in legs:
-    path = curved_path(leg["start"], leg["end"])
-    folium.PolyLine(path, color="yellow", weight=4, tooltip=f"{leg['name']}: {leg['real_km']:,} km").add_to(trip_map)
-    folium.CircleMarker(path[-1], radius=7, color="cyan", fill=True,
-                        tooltip=folium.Tooltip(leg["end"]["name"], permanent=True)).add_to(trip_map)
-    all_points += path
-home = cities[home_name]
-folium.Marker([home["latitude"], home["longitude"]], icon=folium.Icon(color="red", icon="home"),
-              tooltip=folium.Tooltip(home_name, permanent=True)).add_to(trip_map)
-trip_map.fit_bounds([[min(point[0] for point in all_points), min(point[1] for point in all_points)],
-                     [max(point[0] for point in all_points), max(point[1] for point in all_points)]])
+# a map you can draw twice: first with no answers, later with the answers
+def draw_map(show_answers):
+    game_map = folium.Map(tiles=None)
+    folium.TileLayer("Esri.WorldImagery", no_wrap=True, bounds=[[-90, -180], [90, 180]]).add_to(game_map)     # one world only
+    folium.Marker([me["latitude"], me["longitude"]], icon=folium.Icon(color="black", icon="user", prefix="fa"),
+                  tooltip=folium.Tooltip("You", permanent=True)).add_to(game_map)
+    for name in mystery:
+        pin_colour = {closest: "green", farthest: "red"}.get(name, "blue") if show_answers else "blue"
+        folium.Marker([cities[name]["latitude"], cities[name]["longitude"]], icon=folium.Icon(color=pin_colour),
+                      tooltip=folium.Tooltip(name, permanent=True)).add_to(game_map)
+    game_map.fit_bounds(game_map.get_bounds(), max_zoom=6, padding=(40, 40))
+    st_folium(game_map, height=440, key=f"map {show_answers}", returned_objects=[], use_container_width=True)
 
-chart_box, map_box = st.columns(2)
-chart_box.plotly_chart(bar_chart)
-with map_box:
-    st_folium(trip_map, height=450, returned_objects=[])
+# 3. Look at the map, then guess
+st.subheader("Which is closest? Which is farthest?")
+draw_map(False)
+closest_guess = st.radio("The CLOSEST city to you is...", mystery, index=None, horizontal=True, key=f"closest {mystery}")
+farthest_guess = st.radio("The FARTHEST city from you is...", mystery, index=None, horizontal=True, key=f"farthest {mystery}")
+if closest_guess is None or farthest_guess is None:
+    st.stop()                                                        # wait for both guesses
+
+# 4. The answers
+st.subheader("The answers")
+for label, guess, answer in [("Closest", closest_guess, closest), ("Farthest", farthest_guess, farthest)]:
+    if guess == answer:
+        st.success(f"{label}: {answer}. You were right!")
+    else:
+        st.error(f"{label}: it is {answer}, not {guess}.")
+draw_map(True)
+st.dataframe([{"City": name, "Country": countries[cities[name]["countrycode"]]["name"], "Distance (km)": round(distances[name]),
+               "Flying time (hours)": round(distances[name] / 900, 1)} for name in sorted(distances, key=distances.get)], hide_index=True)
+st.caption("Green pin = closest, red pin = farthest. Flying time is for a plane that flies 900 km every hour. Press the button again for 4 new cities!")
